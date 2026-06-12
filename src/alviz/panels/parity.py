@@ -1,0 +1,238 @@
+"""Energy/force parity panel (predicted vs. reference).
+
+Artifact contract
+-----------------
+This panel is a **pure reader**. It does not run a model or contact a
+cluster -- it reads one or more extxyz files in which *every configuration
+already carries both a reference and a predicted value*:
+
+    * energy:  ``atoms.info[energy_ref_key]``   and ``atoms.info[energy_pred_key]``
+    * forces:  ``atoms.arrays[forces_ref_key]`` and ``atoms.arrays[forces_pred_key]``
+
+Defaults follow the convention used elsewhere in the pipeline: reference
+labels are ``REF_energy`` / ``REF_forces`` (what ``remote_handler`` writes
+for ground-truth), and predictions are the ASE calculator defaults
+``energy`` / ``forces``. All four keys are overridable, so any producer's
+naming works without changing this code.
+
+Producing such a file (evaluating a trained model on a DFT-labelled set and
+writing both key sets) is a *producer* responsibility; alviz only consumes
+the result.
+"""
+
+import numpy as np
+
+from alviz.dashboard import Entry
+from alviz.mpl_utils import JsonDict
+
+
+def _rmse(a, b):
+    return float(np.sqrt(np.mean((a - b) ** 2)))
+
+
+def _mae(a, b):
+    return float(np.mean(np.abs(a - b)))
+
+
+def _calc_results(atoms):
+    calc = getattr(atoms, "calc", None)
+    return getattr(calc, "results", {}) if calc is not None else {}
+
+
+def _get_scalar(atoms, key):
+    """Resolve a per-config scalar from info or the attached calculator.
+
+    ASE's extxyz reader moves reserved properties (``energy``, ...) into a
+    ``SinglePointCalculator``, so a key may live in ``info`` *or* in
+    ``calc.results``. Check both so any naming convention works.
+    """
+    if key in atoms.info:
+        return float(atoms.info[key])
+    results = _calc_results(atoms)
+    if key in results:
+        return float(results[key])
+    raise KeyError(
+        f"energy key {key!r} not found in atoms.info or calculator results"
+    )
+
+
+def _get_array(atoms, key):
+    """Resolve a per-atom array from arrays or the attached calculator."""
+    if key in atoms.arrays:
+        return np.asarray(atoms.arrays[key])
+    results = _calc_results(atoms)
+    if key in results:
+        return np.asarray(results[key])
+    raise KeyError(
+        f"forces key {key!r} not found in atoms.arrays or calculator results"
+    )
+
+
+def parity_scatter(
+    ax,
+    obs,
+    pred,
+    *,
+    rmse=None,
+    mae=None,
+    xlabel="",
+    ylabel="",
+    title=None,
+    **scatter_kwargs,
+):
+    """Scatter ``pred`` vs ``obs`` with a y=x guide and RMSE/MAE annotation."""
+    obs = np.asarray(obs, dtype=float)
+    pred = np.asarray(pred, dtype=float)
+
+    s = scatter_kwargs.pop("s", 8)
+    alpha = scatter_kwargs.pop("alpha", 0.5)
+    ax.scatter(obs, pred, s=s, alpha=alpha, **scatter_kwargs)
+
+    if obs.size and pred.size:
+        lo = float(min(obs.min(), pred.min()))
+        hi = float(max(obs.max(), pred.max()))
+        ax.plot([lo, hi], [lo, hi], color="k", lw=1, ls="--", zorder=0)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if title is not None:
+        ax.set_title(title)
+
+    lines = []
+    if rmse is not None:
+        lines.append(f"RMSE = {rmse:.4g}")
+    if mae is not None:
+        lines.append(f"MAE = {mae:.4g}")
+    if lines:
+        ax.text(
+            0.05,
+            0.95,
+            "\n".join(lines),
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=9,
+        )
+    ax.set_aspect("equal", adjustable="datalim")
+
+
+class ParityPanel(Entry):
+    """Predicted-vs-reference parity for energies and (optionally) forces.
+
+    Args:
+        config_files: One path or a list of paths to extxyz files carrying
+            both reference and predicted labels (see module docstring).
+        energy_ref_key, energy_pred_key: ``atoms.info`` keys for reference
+            and predicted energy.
+        forces_ref_key, forces_pred_key: ``atoms.arrays`` keys for reference
+            and predicted forces.
+        per_atom: Divide energies by the number of atoms (eV/atom).
+        show_forces: Whether to include the forces parity subplot.
+        plot_kwargs: Extra keyword args forwarded to the scatter calls
+            (``{"energy": {...}, "forces": {...}}``).
+    """
+
+    name = "parity"
+
+    def __init__(
+        self,
+        config_files,
+        *args,
+        energy_ref_key: str = "REF_energy",
+        energy_pred_key: str = "energy",
+        forces_ref_key: str = "REF_forces",
+        forces_pred_key: str = "forces",
+        per_atom: bool = True,
+        show_forces: bool = True,
+        plot_kwargs: dict = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        if isinstance(config_files, (str, bytes)) or hasattr(
+            config_files, "__fspath__"
+        ):
+            config_files = [config_files]
+        self._config_files = list(config_files)
+        self._energy_ref_key = energy_ref_key
+        self._energy_pred_key = energy_pred_key
+        self._forces_ref_key = forces_ref_key
+        self._forces_pred_key = forces_pred_key
+        self._per_atom = per_atom
+        self._show_forces = show_forces
+        self._plot_kwargs = plot_kwargs or {}
+
+    def allocate_panels(self, fig):
+        self._fig = fig
+        if self._show_forces:
+            self.gs = self.subspec.subgridspec(1, 2)
+            self.ax_e = fig.add_subplot(self.gs[0])
+            self.ax_f = fig.add_subplot(self.gs[1])
+        else:
+            self.ax_e = fig.add_subplot(self.subspec)
+            self.ax_f = None
+
+    def compute_data(self, shared_ressources: dict) -> JsonDict:
+        import ase.io
+
+        e_obs, e_pred = [], []
+        f_obs, f_pred = [], []
+
+        for path in self._config_files:
+            for atoms in ase.io.read(path, index=":"):
+                norm = len(atoms) if self._per_atom else 1
+                e_obs.append(_get_scalar(atoms, self._energy_ref_key) / norm)
+                e_pred.append(_get_scalar(atoms, self._energy_pred_key) / norm)
+                if self._show_forces:
+                    f_obs.extend(
+                        _get_array(atoms, self._forces_ref_key).ravel()
+                    )
+                    f_pred.extend(
+                        _get_array(atoms, self._forces_pred_key).ravel()
+                    )
+
+        e_obs = np.asarray(e_obs, dtype=float)
+        e_pred = np.asarray(e_pred, dtype=float)
+
+        data = JsonDict(
+            e_obs=e_obs.tolist(),
+            e_pred=e_pred.tolist(),
+            e_rmse=_rmse(e_obs, e_pred),
+            e_mae=_mae(e_obs, e_pred),
+            per_atom=self._per_atom,
+            n_configs=len(e_obs),
+        )
+
+        if self._show_forces:
+            f_obs = np.asarray(f_obs, dtype=float)
+            f_pred = np.asarray(f_pred, dtype=float)
+            data["f_obs"] = f_obs.tolist()
+            data["f_pred"] = f_pred.tolist()
+            data["f_rmse"] = _rmse(f_obs, f_pred)
+            data["f_mae"] = _mae(f_obs, f_pred)
+
+        return data
+
+    def plot_data(self):
+        e_unit = "eV/atom" if self.data["per_atom"] else "eV"
+        parity_scatter(
+            self.ax_e,
+            self.data["e_obs"],
+            self.data["e_pred"],
+            rmse=self.data["e_rmse"],
+            mae=self.data["e_mae"],
+            xlabel=f"reference E ({e_unit})",
+            ylabel=f"predicted E ({e_unit})",
+            title=self.name,
+            **self._plot_kwargs.get("energy", {}),
+        )
+        if self.ax_f is not None and "f_obs" in self.data:
+            parity_scatter(
+                self.ax_f,
+                self.data["f_obs"],
+                self.data["f_pred"],
+                rmse=self.data["f_rmse"],
+                mae=self.data["f_mae"],
+                xlabel="reference F (eV/Å)",
+                ylabel="predicted F (eV/Å)",
+                **self._plot_kwargs.get("forces", {}),
+            )

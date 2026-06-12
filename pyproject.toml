@@ -38,6 +38,10 @@ dev = [
     "pytest-cov",
     "pre-commit",
 ]
+# Concrete panels that read atomistic artifacts (extxyz) need ASE.
+panels = [
+    "ase",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

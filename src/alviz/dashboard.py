@@ -84,9 +84,13 @@ class Entry(ABC):
         self._data = None
         self._fig = None
 
-        # Documented fallback: an unnamed entry takes its class name, so the
-        # framework is usable without every subclass declaring ``name``.
-        self.name = name if name is not None else type(self).__name__
+        # Name resolution: explicit argument > class-level ``name`` attribute
+        # > the class name. The class-attribute case is left to normal
+        # attribute lookup so a subclass's declared ``name`` is not shadowed.
+        if name is not None:
+            self.name = name
+        elif not hasattr(type(self), "name"):
+            self.name = type(self).__name__
 
     def get_data(self, shared_ressources, force_recompute) -> JsonDict:
         """Get or compute the data for this entry.
