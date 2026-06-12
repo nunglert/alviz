@@ -24,6 +24,7 @@ import numpy as np
 
 from alviz.dashboard import Entry
 from alviz.mpl_utils import JsonDict
+from alviz.panels._atoms import as_paths, resolve_array, resolve_scalar
 
 
 def _rmse(a, b):
@@ -32,40 +33,6 @@ def _rmse(a, b):
 
 def _mae(a, b):
     return float(np.mean(np.abs(a - b)))
-
-
-def _calc_results(atoms):
-    calc = getattr(atoms, "calc", None)
-    return getattr(calc, "results", {}) if calc is not None else {}
-
-
-def _get_scalar(atoms, key):
-    """Resolve a per-config scalar from info or the attached calculator.
-
-    ASE's extxyz reader moves reserved properties (``energy``, ...) into a
-    ``SinglePointCalculator``, so a key may live in ``info`` *or* in
-    ``calc.results``. Check both so any naming convention works.
-    """
-    if key in atoms.info:
-        return float(atoms.info[key])
-    results = _calc_results(atoms)
-    if key in results:
-        return float(results[key])
-    raise KeyError(
-        f"energy key {key!r} not found in atoms.info or calculator results"
-    )
-
-
-def _get_array(atoms, key):
-    """Resolve a per-atom array from arrays or the attached calculator."""
-    if key in atoms.arrays:
-        return np.asarray(atoms.arrays[key])
-    results = _calc_results(atoms)
-    if key in results:
-        return np.asarray(results[key])
-    raise KeyError(
-        f"forces key {key!r} not found in atoms.arrays or calculator results"
-    )
 
 
 def parity_scatter(
@@ -148,11 +115,7 @@ class ParityPanel(Entry):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        if isinstance(config_files, (str, bytes)) or hasattr(
-            config_files, "__fspath__"
-        ):
-            config_files = [config_files]
-        self._config_files = list(config_files)
+        self._config_files = as_paths(config_files)
         self._energy_ref_key = energy_ref_key
         self._energy_pred_key = energy_pred_key
         self._forces_ref_key = forces_ref_key
@@ -180,14 +143,18 @@ class ParityPanel(Entry):
         for path in self._config_files:
             for atoms in ase.io.read(path, index=":"):
                 norm = len(atoms) if self._per_atom else 1
-                e_obs.append(_get_scalar(atoms, self._energy_ref_key) / norm)
-                e_pred.append(_get_scalar(atoms, self._energy_pred_key) / norm)
+                e_obs.append(
+                    resolve_scalar(atoms, self._energy_ref_key) / norm
+                )
+                e_pred.append(
+                    resolve_scalar(atoms, self._energy_pred_key) / norm
+                )
                 if self._show_forces:
                     f_obs.extend(
-                        _get_array(atoms, self._forces_ref_key).ravel()
+                        resolve_array(atoms, self._forces_ref_key).ravel()
                     )
                     f_pred.extend(
-                        _get_array(atoms, self._forces_pred_key).ravel()
+                        resolve_array(atoms, self._forces_pred_key).ravel()
                     )
 
         e_obs = np.asarray(e_obs, dtype=float)
