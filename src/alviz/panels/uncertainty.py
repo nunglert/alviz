@@ -1,24 +1,21 @@
 """Ensemble uncertainty across active-learning iterations.
 
-Pure reader: given one extxyz file per AL iteration (each holding the
-candidate configurations of that iteration, labelled with per-config
-ensemble uncertainties), it renders two heatmaps -- energy and force
-uncertainty -- over (iteration index, configuration index).
+* ``UncertaintyData``           -- the data contract.
+* ``SampleUncertainties``       -- abstract: heatmaps + contract.
+* ``ExtxyzSampleUncertainties`` -- reads per-iteration uncertainties from
+                                   extxyz files.
 
-Artifact contract
------------------
-Each configuration carries, in ``atoms.info``:
-    * ``energy_uncert``          -- scalar energy uncertainty
-    * ``forces_uncert_normed``   -- scalar (norm-reduced) force uncertainty
-
-Both key names are overridable. Iterations may contain different numbers of
-configurations; shorter rows are padded with NaN (rendered blank).
+Renders two heatmaps -- energy and force uncertainty -- over (iteration
+index, configuration index). Iterations may hold different numbers of
+configurations; shorter rows are NaN-padded (rendered blank).
 """
+
+from abc import abstractmethod
 
 import numpy as np
 
 from alviz.dashboard import Entry
-from alviz.mpl_utils import JsonDict
+from alviz.data import PanelData
 
 
 def _pad_to_grid(rows):
@@ -32,35 +29,35 @@ def _pad_to_grid(rows):
     return grid
 
 
+class UncertaintyData(PanelData):
+    """Per-iteration lists of energy/force uncertainty (possibly ragged)."""
+
+    euncs: list[list[float]]
+    funcs: list[list[float]]
+    n_iterations: int
+
+
 class SampleUncertainties(Entry):
     """Energy/force ensemble-uncertainty heatmaps per AL iteration.
 
-    Args:
-        traj_files: Ordered list of per-iteration extxyz files.
-        energy_uncert_key: ``info`` key for the energy uncertainty.
-        forces_uncert_key: ``info`` key for the force uncertainty.
+    Args (rendering):
         orientation: ``"horizontal"`` (side by side) or ``"vertical"``.
         cmap: Matplotlib colormap.
-        vmax: Upper color limit (shared by both panels); None = autoscale.
+        vmax: Upper color limit (shared); None = autoscale.
     """
 
     name = "sample_uncertainties"
+    data_class = UncertaintyData
 
     def __init__(
         self,
-        traj_files,
         *args,
-        energy_uncert_key: str = "energy_uncert",
-        forces_uncert_key: str = "forces_uncert_normed",
         orientation: str = "horizontal",
         cmap: str = "viridis",
         vmax=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self._traj_files = list(traj_files)
-        self._energy_uncert_key = energy_uncert_key
-        self._forces_uncert_key = forces_uncert_key
         self._cmap = cmap
         self._vmax = vmax
         if orientation == "vertical":
@@ -78,7 +75,51 @@ class SampleUncertainties(Entry):
         self.ax_f = fig.add_subplot(self.gs[1])
         self.ax_f.set_title("Force uncertainty")
 
-    def compute_data(self, shared_ressources: dict) -> JsonDict:
+    @abstractmethod
+    def compute_data(self, shared_ressources: dict) -> UncertaintyData:
+        """Produce per-iteration uncertainties (see :class:`UncertaintyData`)."""
+        raise NotImplementedError
+
+    def _heatmap(self, ax, rows, label):
+        grid = _pad_to_grid(rows)
+        if grid.size == 0:
+            return
+        im = ax.pcolormesh(
+            grid, cmap=self._cmap, vmin=0, vmax=self._vmax, rasterized=True
+        )
+        self._fig.colorbar(im, ax=ax, label=label)
+        ax.set_xlabel("configuration index")
+        ax.set_ylabel("iteration")
+
+    def plot_data(self):
+        self._heatmap(self.ax_e, self.data.euncs, "energy uncert.")
+        self._heatmap(self.ax_f, self.data.funcs, "force uncert.")
+
+
+class ExtxyzSampleUncertainties(SampleUncertainties):
+    """Read per-iteration uncertainties from one extxyz file per iteration.
+
+    Each configuration carries the uncertainties in ``atoms.info`` under
+    ``energy_uncert_key`` / ``forces_uncert_key`` (both overridable).
+
+    Args:
+        traj_files: Ordered list of per-iteration extxyz files.
+    """
+
+    def __init__(
+        self,
+        traj_files,
+        *args,
+        energy_uncert_key: str = "energy_uncert",
+        forces_uncert_key: str = "forces_uncert_normed",
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self._traj_files = list(traj_files)
+        self._energy_uncert_key = energy_uncert_key
+        self._forces_uncert_key = forces_uncert_key
+
+    def compute_data(self, shared_ressources: dict) -> UncertaintyData:
         import ase.io
 
         euncs, funcs = [], []
@@ -91,27 +132,8 @@ class SampleUncertainties(Entry):
                 [float(at.info[self._forces_uncert_key]) for at in configs]
             )
 
-        return JsonDict(
+        return UncertaintyData(
             euncs=euncs,
             funcs=funcs,
             n_iterations=len(self._traj_files),
         )
-
-    def _heatmap(self, ax, rows, label):
-        grid = _pad_to_grid(rows)
-        if grid.size == 0:
-            return
-        im = ax.pcolormesh(
-            grid,
-            cmap=self._cmap,
-            vmin=0,
-            vmax=self._vmax,
-            rasterized=True,
-        )
-        self._fig.colorbar(im, ax=ax, label=label)
-        ax.set_xlabel("configuration index")
-        ax.set_ylabel("iteration")
-
-    def plot_data(self):
-        self._heatmap(self.ax_e, self.data["euncs"], "energy uncert.")
-        self._heatmap(self.ax_f, self.data["funcs"], "force uncert.")

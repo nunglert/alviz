@@ -11,7 +11,8 @@ produced them (keeping dependencies one-way).
 """
 
 from alviz.dashboard import Dashboard, Entry, string2slice
+from alviz.data import PanelData
 from alviz.mpl_utils import JsonDict
 
-__all__ = ["Dashboard", "Entry", "string2slice", "JsonDict"]
+__all__ = ["Dashboard", "Entry", "string2slice", "JsonDict", "PanelData"]
 __version__ = "0.1.0"

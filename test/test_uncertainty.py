@@ -1,14 +1,18 @@
-"""End-to-end test for SampleUncertainties against synthetic extxyz."""
+"""Tests for the ensemble-uncertainty panel."""
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 pytest.importorskip("ase")
 import ase.io  # noqa: E402
 from ase import Atoms  # noqa: E402
 
 from alviz import Dashboard  # noqa: E402
-from alviz.panels import SampleUncertainties  # noqa: E402
+from alviz.panels import (  # noqa: E402
+    ExtxyzSampleUncertainties,
+    UncertaintyData,
+)
 from alviz.panels.uncertainty import _pad_to_grid  # noqa: E402
 
 
@@ -32,15 +36,16 @@ def test_uncertainties_end_to_end(tmp_path):
     ]
 
     board = Dashboard(1, 1, fail_silently=False)
-    panel = SampleUncertainties(traj_files=files, datapath=tmp_path)
+    panel = ExtxyzSampleUncertainties(traj_files=files, datapath=tmp_path)
     board.register_entry(panel, ("0", "0"))
     board.allocate_panels()
     board.compute_data()
     board.plot_panels()
 
-    assert panel.data["n_iterations"] == 3
-    assert len(panel.data["euncs"]) == 3
-    assert all(len(row) == 5 for row in panel.data["euncs"])
+    assert isinstance(panel.data, UncertaintyData)
+    assert panel.data.n_iterations == 3
+    assert len(panel.data.euncs) == 3
+    assert all(len(row) == 5 for row in panel.data.euncs)
 
     out = tmp_path / "uncert.pdf"
     board.savefig(out)
@@ -56,7 +61,7 @@ def test_uncertainties_ragged_iterations(tmp_path):
         _iteration_file(tmp_path, "ns.1.extxyz", 6, rng),
     ]
     board = Dashboard(1, 1, fail_silently=False)
-    panel = SampleUncertainties(traj_files=files, datapath=tmp_path)
+    panel = ExtxyzSampleUncertainties(traj_files=files, datapath=tmp_path)
     board.register_entry(panel, ("0", "0"))
     board.allocate_panels()
     board.compute_data()
@@ -85,7 +90,7 @@ def test_uncertainties_custom_keys(tmp_path):
     path = tmp_path / "ns.0.extxyz"
     ase.io.write(path, [atoms])
 
-    panel = SampleUncertainties(
+    panel = ExtxyzSampleUncertainties(
         traj_files=[path],
         datapath=tmp_path,
         energy_uncert_key="e_sig",
@@ -96,5 +101,11 @@ def test_uncertainties_custom_keys(tmp_path):
     board.allocate_panels()
     board.compute_data()
 
-    assert panel.data["euncs"] == [[0.1]]
-    assert panel.data["funcs"] == [[0.2]]
+    assert panel.data.euncs == [[0.1]]
+    assert panel.data.funcs == [[0.2]]
+
+
+@pytest.mark.local
+def test_uncertainty_data_requires_fields():
+    with pytest.raises(ValidationError):
+        UncertaintyData(euncs=[[0.1]], funcs=[[0.2]])  # missing n_iterations

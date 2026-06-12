@@ -29,6 +29,7 @@ classifiers = [
 dependencies = [
     "numpy",
     "matplotlib",
+    "pydantic>=2",
 ]
 readme = "README.md"
 

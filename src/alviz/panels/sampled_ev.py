@@ -1,54 +1,42 @@
 """Distributions of sampled energy, force and volume.
 
-Useful for judging the spread of a (e.g. NPT-) sampled set. Pure reader:
-ingests one or more extxyz files of labelled configurations and histograms
-their per-atom energy, force components, and per-atom volume.
+* ``SampledEVData``              -- the data contract.
+* ``SampledEnergyVolume``        -- abstract: histograms + contract.
+* ``ExtxyzSampledEnergyVolume``  -- reads the distributions from extxyz.
 
-Artifact contract
------------------
-    * energy: ``atoms.info[energy_key]`` or calculator results
-    * forces: ``atoms.arrays[forces_key]`` or calculator results
-    * volume: taken from the cell via ``atoms.get_volume()``
-
-Defaults (``energy`` / ``forces``) match ASE calculator results, so a file
-written from an evaluator works out of the box; override for other naming.
+Useful for judging the spread of a (e.g. NPT-) sampled set.
 """
+
+from abc import abstractmethod
 
 import numpy as np
 
 from alviz.dashboard import Entry
-from alviz.mpl_utils import JsonDict
+from alviz.data import PanelData
 from alviz.panels._atoms import as_paths, resolve_array, resolve_scalar
 
 
-class SampledEnergyVolume(Entry):
-    """Histograms of per-atom energy, force components and per-atom volume.
+class SampledEVData(PanelData):
+    """Per-atom (or total) energies, flattened forces, and volumes."""
 
-    Args:
-        config_files: One path or list of paths to labelled extxyz files.
-        energy_key: ``info``/calculator key for the energy.
-        forces_key: ``arrays``/calculator key for the forces.
-        per_atom: Normalize energy and volume per atom.
+    es: list[float]
+    fs: list[float]
+    vs: list[float]
+    per_atom: bool
+
+
+class SampledEnergyVolume(Entry):
+    """Histograms of energy, force components and volume.
+
+    Args (rendering):
         plot_kwargs: Extra kwargs forwarded to ``ax.hist``.
     """
 
     name = "sampled_energy_volume"
+    data_class = SampledEVData
 
-    def __init__(
-        self,
-        config_files,
-        *args,
-        energy_key: str = "energy",
-        forces_key: str = "forces",
-        per_atom: bool = True,
-        plot_kwargs: dict = None,
-        **kwargs,
-    ):
+    def __init__(self, *args, plot_kwargs: dict = None, **kwargs):
         super().__init__(*args, **kwargs)
-        self._config_files = as_paths(config_files)
-        self._energy_key = energy_key
-        self._forces_key = forces_key
-        self._per_atom = per_atom
         self._plot_kwargs = plot_kwargs or {}
 
     def allocate_panels(self, fig):
@@ -61,23 +49,10 @@ class SampledEnergyVolume(Entry):
         self.ax_v = fig.add_subplot(self.gs[0, 2])
         self.ax_v.set_title("Volume")
 
-    def compute_data(self, shared_ressources: dict) -> JsonDict:
-        import ase.io
-
-        es, fs, vs = [], [], []
-        for path in self._config_files:
-            for atoms in ase.io.read(path, index=":"):
-                norm = len(atoms) if self._per_atom else 1
-                es.append(resolve_scalar(atoms, self._energy_key) / norm)
-                fs.extend(resolve_array(atoms, self._forces_key).ravel())
-                vs.append(atoms.get_volume() / norm)
-
-        return JsonDict(
-            es=np.asarray(es, dtype=float).tolist(),
-            fs=np.asarray(fs, dtype=float).tolist(),
-            vs=np.asarray(vs, dtype=float).tolist(),
-            per_atom=self._per_atom,
-        )
+    @abstractmethod
+    def compute_data(self, shared_ressources: dict) -> SampledEVData:
+        """Produce the distributions (see :class:`SampledEVData`)."""
+        raise NotImplementedError
 
     def _hist(self, ax, values, color, ylabel):
         kwargs = dict(
@@ -93,12 +68,54 @@ class SampledEnergyVolume(Entry):
         ax.set_ylabel(ylabel)
 
     def plot_data(self):
-        e_unit = "eV/at" if self.data["per_atom"] else "eV"
-        v_unit = (
-            r"$\AA^3\,\mathrm{atom}^{-1}$"
-            if self.data["per_atom"]
-            else r"$\AA^3$"
+        d = self.data
+        e_unit = "eV/at" if d.per_atom else "eV"
+        v_unit = r"$\AA^3\,\mathrm{atom}^{-1}$" if d.per_atom else r"$\AA^3$"
+        self._hist(self.ax_e, d.es, "tab:blue", rf"$E$ [{e_unit}]")
+        self._hist(self.ax_f, d.fs, "tab:green", r"$F$ [eV/$\AA$]")
+        self._hist(self.ax_v, d.vs, "tab:red", rf"$V$ [{v_unit}]")
+
+
+class ExtxyzSampledEnergyVolume(SampledEnergyVolume):
+    """Read energy/force/volume distributions from extxyz files.
+
+    Args:
+        config_files: One path or list of paths to labelled extxyz files.
+        energy_key: ``info``/calculator key for the energy.
+        forces_key: ``arrays``/calculator key for the forces.
+        per_atom: Normalize energy and volume per atom.
+    """
+
+    def __init__(
+        self,
+        config_files,
+        *args,
+        energy_key: str = "energy",
+        forces_key: str = "forces",
+        per_atom: bool = True,
+        plot_kwargs: dict = None,
+        **kwargs,
+    ):
+        super().__init__(*args, plot_kwargs=plot_kwargs, **kwargs)
+        self._config_files = as_paths(config_files)
+        self._energy_key = energy_key
+        self._forces_key = forces_key
+        self._per_atom = per_atom
+
+    def compute_data(self, shared_ressources: dict) -> SampledEVData:
+        import ase.io
+
+        es, fs, vs = [], [], []
+        for path in self._config_files:
+            for atoms in ase.io.read(path, index=":"):
+                norm = len(atoms) if self._per_atom else 1
+                es.append(resolve_scalar(atoms, self._energy_key) / norm)
+                fs.extend(resolve_array(atoms, self._forces_key).ravel())
+                vs.append(atoms.get_volume() / norm)
+
+        return SampledEVData(
+            es=np.asarray(es, dtype=float).tolist(),
+            fs=np.asarray(fs, dtype=float).tolist(),
+            vs=np.asarray(vs, dtype=float).tolist(),
+            per_atom=self._per_atom,
         )
-        self._hist(self.ax_e, self.data["es"], "tab:blue", rf"$E$ [{e_unit}]")
-        self._hist(self.ax_f, self.data["fs"], "tab:green", r"$F$ [eV/$\AA$]")
-        self._hist(self.ax_v, self.data["vs"], "tab:red", rf"$V$ [{v_unit}]")

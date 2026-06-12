@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.gridspec import GridSpec, SubplotSpec
 
+from alviz.data import PanelData
 from alviz.mpl_utils import JsonDict
 
 logger = logging.getLogger(__name__)
@@ -64,9 +65,16 @@ class Entry(ABC):
 
     Methods to implement:
         allocate_panels(self, fig): Allocate subplots in the figure.
-        compute_data(self, shared_ressources): Compute and return a JsonDict.
+        compute_data(self, shared_ressources): Compute and return the panel's
+            data -- a ``JsonDict`` (free-form) or a ``PanelData`` subclass
+            (typed/validated). Set ``data_class`` to the latter so the cache
+            reloads (and re-validates) it.
         plot_data(self): Plot the computed data on the allocated subplots.
     """
+
+    # How a cached result is reloaded. JsonDict by default (free-form);
+    # typed panels override with their PanelData subclass.
+    data_class = JsonDict
 
     def __init__(
         self,
@@ -92,15 +100,12 @@ class Entry(ABC):
         elif not hasattr(type(self), "name"):
             self.name = type(self).__name__
 
-    def get_data(self, shared_ressources, force_recompute) -> JsonDict:
-        """Get or compute the data for this entry.
+    def get_data(self, shared_ressources, force_recompute) -> None:
+        """Get or compute the data for this entry, caching it as JSON.
 
         Args:
             shared_ressources: Shared ressources among entries.
             force_recompute: Whether to force recomputation of data.
-
-        Returns:
-            JsonDict containing the computed data.
         """
         # File to store/load the data
         json_file = self.datapath / f"{self.name}.json"
@@ -109,11 +114,22 @@ class Entry(ABC):
         # Load from file if it exists and no recomputation is forced
         if os.path.exists(json_file) and not force_recomp:
             logger.info(f"... Loading from file: {self.name}")
-            self.data = JsonDict.from_json(json_file)
+            self.data = self.data_class.from_json(json_file)
         else:
             logger.info(f"... Computing: {self.name}")
             # Compute the data
-            self.data = self.compute_data(shared_ressources)
+            data = self.compute_data(shared_ressources)
+            # Enforce the panel invariant: compute_data's type must match
+            # data_class, so the JSON cache reloads as the same type. Caught
+            # now (fresh compute) rather than on the next run's cache hit.
+            if not isinstance(data, self.data_class):
+                raise TypeError(
+                    f"{type(self).__name__}.compute_data returned "
+                    f"{type(data).__name__}, but data_class is "
+                    f"{self.data_class.__name__}; set data_class to the type "
+                    "compute_data returns so the cache round-trips."
+                )
+            self.data = data
             self.data.to_json(json_file, indent=self._indent)
 
     def register_arguments(self, parser):
@@ -130,7 +146,12 @@ class Entry(ABC):
 
     @abstractmethod
     def compute_data(self, shared_ressources: dict):
-        """Compute and return data as a JsonDict."""
+        """Compute and return the panel's data.
+
+        Return a ``JsonDict`` (free-form) or a ``PanelData`` subclass
+        (typed/validated). Whatever type this returns must match the panel's
+        ``data_class`` so the JSON cache reloads correctly.
+        """
         return
 
     @abstractmethod
@@ -157,8 +178,10 @@ class Entry(ABC):
         return self._data
 
     @data.setter
-    def data(self, val: JsonDict):
-        assert isinstance(val, JsonDict), "Only support JsonDict currently!"
+    def data(self, val):
+        assert isinstance(
+            val, (JsonDict, PanelData)
+        ), "data must be a JsonDict or a PanelData"
         self._data = val
 
     @classmethod

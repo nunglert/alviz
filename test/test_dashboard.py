@@ -6,7 +6,7 @@ in-memory panel -- no producer artifacts or heavy dependencies required.
 
 import pytest
 
-from alviz import Dashboard, Entry, JsonDict, string2slice
+from alviz import Dashboard, Entry, JsonDict, PanelData, string2slice
 
 
 class _SinePanel(Entry):
@@ -20,6 +20,28 @@ class _SinePanel(Entry):
 
     def plot_data(self):
         self.ax.plot(self.data["x"], self.data["y"])
+
+
+@pytest.mark.local
+def test_compute_data_type_must_match_data_class(tmp_path):
+    """compute_data returning a type != data_class fails immediately."""
+
+    class _Mismatch(Entry):
+        # data_class defaults to JsonDict, but compute_data returns PanelData
+        def allocate_panels(self, fig):
+            self.ax = fig.add_subplot(self.subspec)
+
+        def compute_data(self, shared_ressources):
+            return PanelData()  # not a JsonDict -> invariant violation
+
+        def plot_data(self):
+            pass
+
+    # Tested at the source (get_data); Dashboard.compute_data would re-wrap
+    # this TypeError as a generic Exception under fail_silently=False.
+    panel = _Mismatch(datapath=tmp_path)
+    with pytest.raises(TypeError, match="data_class"):
+        panel.get_data({}, force_recompute=True)
 
 
 # --------------------------------------------------------------------------
