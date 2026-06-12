@@ -1,0 +1,51 @@
+# -*- coding: utf-8 -*-
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alviz"
+version = "0.1.0"
+authors = [
+    { name = "Nico Unglert", email = "nico.unglert@tuwien.ac.at" }
+]
+description = "Grid-dashboard visualization for active-learning MLFF workflows"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Natural Language :: English"
+]
+# The framework (Entry/Dashboard/JsonDict + matplotlib helpers) needs only
+# numpy + matplotlib. Panels that read producer artifacts pull their own
+# deps via extras (e.g. ase, scikit-learn) -- alviz never imports the
+# producer packages' internals.
+dependencies = [
+    "numpy",
+    "matplotlib",
+]
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pre-commit",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+addopts = "-ra"
+markers = [
+    "local: runs with no external data/services; always runnable",
+    "integration: needs producer artifacts or heavy deps; deselected by default",
+]
