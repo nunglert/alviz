@@ -6,7 +6,14 @@ in-memory panel -- no producer artifacts or heavy dependencies required.
 
 import pytest
 
-from alviz import Dashboard, Entry, JsonDict, PanelData, string2slice
+from alviz import (
+    Dashboard,
+    Entry,
+    JsonDict,
+    PanelData,
+    select_entries,
+    string2slice,
+)
 
 
 class _SinePanel(Entry):
@@ -144,6 +151,126 @@ def test_fail_silently_skips_bad_panel(tmp_path):
     board.allocate_panels()
     board.compute_data()  # broken panel logged + excluded, no raise
     board.plot_panels()
+
+    out = tmp_path / "board.pdf"
+    board.savefig(out)
+    assert out.exists() and out.stat().st_size > 0
+
+
+def _panel(tmp_path, name):
+    return _SinePanel(datapath=tmp_path, name=name)
+
+
+# --------------------------------------------------------------------------
+# select_entries
+# --------------------------------------------------------------------------
+@pytest.mark.local
+def test_select_entries_only_exclude_and_order(tmp_path):
+    entries = [_panel(tmp_path, n) for n in ("a", "b", "c")]
+    assert [e.name for e in select_entries(entries)] == ["a", "b", "c"]
+    # 'only' keeps the requested names but in the original order.
+    assert [e.name for e in select_entries(entries, only=["c", "a"])] == [
+        "a",
+        "c",
+    ]
+    assert [e.name for e in select_entries(entries, exclude=["b"])] == [
+        "a",
+        "c",
+    ]
+
+
+# --------------------------------------------------------------------------
+# Dashboard.from_entries / .entries
+# --------------------------------------------------------------------------
+@pytest.mark.local
+def test_from_entries_auto_grid_and_order(tmp_path):
+    entries = [_panel(tmp_path, n) for n in ("a", "b", "c")]
+    board = Dashboard.from_entries(entries, ncols=2)
+    assert board._ncols == 2
+    assert board._nrows == 2  # ceil(3 / 2)
+    assert [e.name for e in board.entries] == ["a", "b", "c"]
+
+
+@pytest.mark.local
+def test_from_entries_applies_selection(tmp_path):
+    entries = [_panel(tmp_path, n) for n in ("a", "b", "c")]
+    board = Dashboard.from_entries(entries, ncols=2, only=["b"])
+    assert [e.name for e in board.entries] == ["b"]
+
+
+@pytest.mark.local
+def test_from_entries_colspan_spans_columns(tmp_path):
+    a = _panel(tmp_path, "a")
+    a.colspan = 2  # 'a' should fill the whole first row
+    b = _panel(tmp_path, "b")
+    board = Dashboard.from_entries([a, b], ncols=2)
+
+    assert board._nrows == 2
+    layout = board._layout
+    # entry 0 ('a') occupies both columns of row 0; 'b' drops to row 1.
+    assert layout[0, 0].strip() == "0" and layout[0, 1].strip() == "0"
+    assert layout[1, 0].strip() == "1"
+
+
+@pytest.mark.local
+def test_from_entries_colspan_clamped_to_ncols(tmp_path):
+    a = _panel(tmp_path, "a")
+    a.colspan = 5  # wider than the grid -> clamped to ncols
+    board = Dashboard.from_entries([a], ncols=2)
+    assert board._nrows == 1
+    assert board._layout[0, 0].strip() == "0"
+    assert board._layout[0, 1].strip() == "0"
+
+
+@pytest.mark.local
+def test_from_entries_rowspan_fills_around(tmp_path):
+    a = _panel(tmp_path, "a")
+    a.rowspan = 2  # tall: occupies (0,0) and (1,0)
+    b = _panel(tmp_path, "b")
+    c = _panel(tmp_path, "c")
+    board = Dashboard.from_entries([a, b, c], ncols=2)
+
+    assert board._nrows == 2
+    layout = board._layout
+    assert layout[0, 0].strip() == "0" and layout[1, 0].strip() == "0"
+    assert layout[0, 1].strip() == "1"  # 'b' to the right of 'a'
+    assert layout[1, 1].strip() == "2"  # 'c' fills the hole below 'b'
+
+
+# --------------------------------------------------------------------------
+# Dashboard.render
+# --------------------------------------------------------------------------
+@pytest.mark.local
+def test_render_runs_lifecycle_and_titles(tmp_path):
+    board = Dashboard.from_entries([_panel(tmp_path, "a")], ncols=1)
+    result = board.render(suptitle="My title")
+    assert result is board  # chainable
+    assert any(t.get_text() == "My title" for t in board._fig.texts)
+
+    out = tmp_path / "board.pdf"
+    board.savefig(out)
+    assert out.exists() and out.stat().st_size > 0
+
+
+@pytest.mark.local
+def test_render_skips_compute_failure_at_plot(tmp_path):
+    """A compute failure is shared to plot, so render stays non-fatal."""
+
+    class _Broken(Entry):
+        def allocate_panels(self, fig):
+            self.ax = fig.add_subplot(self.subspec)
+
+        def compute_data(self, shared_ressources):
+            raise RuntimeError("boom")
+
+        def plot_data(self):
+            self.ax.plot([0], [0])
+
+    board = Dashboard.from_entries(
+        [_Broken(datapath=tmp_path, name="broken"), _panel(tmp_path, "ok")],
+        ncols=2,
+    )
+    board.render()  # broken panel computed+plotted-excluded, no raise
 
     out = tmp_path / "board.pdf"
     board.savefig(out)

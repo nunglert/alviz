@@ -27,6 +27,64 @@ from alviz.mpl_utils import JsonDict
 logger = logging.getLogger(__name__)
 
 
+def select_entries(entries, only=None, exclude=None) -> list:
+    """Filter entries by their ``name`` attribute, preserving order.
+
+    Args:
+        entries: Iterable of :class:`Entry`.
+        only: If given, keep only entries whose name is in this collection.
+        exclude: Entry names to drop.
+
+    A generic helper -- selecting which panels to show is dashboard logic, not
+    anything a particular data producer needs to know about.
+    """
+    only = set(only) if only else None
+    exclude = set(exclude or ())
+    return [
+        e
+        for e in entries
+        if (only is None or e.name in only) and e.name not in exclude
+    ]
+
+
+def _grid_placements(entries, ncols: int) -> list:
+    """First-fit packing of entries (with spans) into an ``ncols``-wide grid.
+
+    Each entry may carry ``rowspan``/``colspan`` attributes (default 1);
+    ``colspan`` is clamped to ``ncols``. Returns a list of
+    ``(entry, row, col, rowspan, colspan)`` placed row-major, top-left-first,
+    filling holes left by wider/taller neighbours. Rows grow as needed.
+    """
+    occupied: set = set()
+    placements = []
+
+    def fits(r, c, rs, cs):
+        return all(
+            (r + i, c + j) not in occupied
+            for i in range(rs)
+            for j in range(cs)
+        )
+
+    for entry in entries:
+        rs = max(1, int(getattr(entry, "rowspan", 1)))
+        cs = min(ncols, max(1, int(getattr(entry, "colspan", 1))))
+        r = 0
+        while True:
+            col = next(
+                (c for c in range(ncols - cs + 1) if fits(r, c, rs, cs)),
+                None,
+            )
+            if col is not None:
+                for i in range(rs):
+                    for j in range(cs):
+                        occupied.add((r + i, col + j))
+                placements.append((entry, r, col, rs, cs))
+                break
+            r += 1
+
+    return placements
+
+
 def string2slice(string: str):
     """Convert an index string to an ``int``-like or ``slice``.
 
@@ -234,8 +292,12 @@ class Dashboard:
         self._empty_layout = self._layout.copy()
         self._index_array = np.arange(nrows * ncols).reshape(nrows, ncols)
 
+        # Constrained layout (not tight_layout) so spacing is computed
+        # automatically *including inside subgridspecs* -- panels with several
+        # sub-axes get spaced without per-panel wspace tuning.
         self._fig = plt.figure(
-            figsize=(width_per_panel * ncols, height_per_panel * nrows)
+            figsize=(width_per_panel * ncols, height_per_panel * nrows),
+            layout="constrained",
         )
 
         # Handles the layout of the figure
@@ -245,6 +307,47 @@ class Dashboard:
             figure=self._fig,
             height_ratios=[1.0] * nrows,
         )
+
+    @classmethod
+    def from_entries(
+        cls,
+        entries,
+        *,
+        ncols: int = 2,
+        width_per_panel: float = 4.0,
+        height_per_panel: float = 4.0,
+        only=None,
+        exclude=None,
+        fail_silently: bool = True,
+    ) -> "Dashboard":
+        """Build a board from a flat list of entries on an auto-sized grid.
+
+        Entries are packed row-major; rows grow to fit. A panel may occupy
+        more than one cell by declaring a ``colspan`` and/or ``rowspan``
+        attribute (default 1 each) -- e.g. ``class WidePanel(Entry): colspan
+        = 2``, or ``panel.colspan = 2`` on an instance. ``colspan`` is clamped
+        to ``ncols``. ``only``/``exclude`` filter by name first (see
+        :func:`select_entries`). Callers needing explicit coordinates can still
+        construct ``Dashboard`` directly and call :meth:`register_entry`.
+        """
+        entries = select_entries(entries, only=only, exclude=exclude)
+        placements = _grid_placements(entries, ncols)
+        nrows = max((r + rs for _, r, _, rs, _ in placements), default=1)
+        board = cls(
+            nrows,
+            ncols,
+            width_per_panel,
+            height_per_panel,
+            fail_silently=fail_silently,
+        )
+        for entry, r, c, rs, cs in placements:
+            board.register_entry(entry, (f"{r}:{r + rs}", f"{c}:{c + cs}"))
+        return board
+
+    @property
+    def entries(self) -> list:
+        """The registered entries, in registration (grid) order."""
+        return list(self._entries)
 
     def register_entry(self, entry: Entry, coordinates: tuple[str, str]):
         """Register an entry at the given grid coordinates.
@@ -347,7 +450,41 @@ class Dashboard:
                 if not self._fail_silently:
                     raise Exception(fail_msg)
 
+    def render(
+        self,
+        *,
+        suptitle: Optional[str] = None,
+        recompute: Optional[list[str]] = None,
+        exclude: Optional[list[str]] = None,
+    ) -> "Dashboard":
+        """Run the allocate -> compute -> plot lifecycle; optionally title it.
+
+        A panel that fails to compute is added to a *shared* exclude list so it
+        is also skipped at plot time (otherwise plotting an un-computed panel
+        trips an assertion). Returns ``self`` for chaining.
+
+        Args:
+            suptitle: Figure-level title, if any.
+            recompute: Entry names to force-recompute (ignore the JSON cache).
+            exclude: Entry names to skip up front.
+        """
+        exclude_entries = list(exclude or [])
+        self.allocate_panels()
+        # compute_data appends any failures to this list in place; passing the
+        # same object to plot_panels keeps the two stages in agreement.
+        self.compute_data(
+            recompute_entries=recompute, exclude_entries=exclude_entries
+        )
+        self.plot_panels(exclude_entries=exclude_entries)
+        if suptitle:
+            self._fig.suptitle(suptitle)
+        return self
+
     def savefig(self, filepath):
-        """Tight-layout and save the figure to ``filepath``."""
-        self._fig.tight_layout()
+        """Save the figure to ``filepath`` (layout is managed automatically).
+
+        The figure uses matplotlib's constrained-layout engine, so spacing
+        (including within panels' subgridspecs) is resolved at draw time --
+        no explicit ``tight_layout`` call.
+        """
         self._fig.savefig(filepath, bbox_inches="tight")

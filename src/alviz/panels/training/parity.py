@@ -127,6 +127,7 @@ class ParityPanel(Entry):
 
     name = "parity"
     data_class = ParityData
+    colspan = 2
 
     def __init__(self, *args, show_forces=True, plot_kwargs=None, **kwargs):
         super().__init__(*args, **kwargs)

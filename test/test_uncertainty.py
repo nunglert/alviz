@@ -13,7 +13,7 @@ from alviz.panels import (  # noqa: E402
     ExtxyzSampleUncertainties,
     UncertaintyData,
 )
-from alviz.panels.uncertainty import _pad_to_grid  # noqa: E402
+from alviz.panels.nested_sampling.uncertainty import _pad_to_grid  # noqa: E402
 
 
 def _iteration_file(tmp_path, name, n_configs, rng):

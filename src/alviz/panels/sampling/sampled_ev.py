@@ -86,6 +86,8 @@ class ExtxyzSampledEnergyVolume(SampledEnergyVolume):
         per_atom: Normalize energy and volume per atom.
     """
 
+    colspan = 2
+
     def __init__(
         self,
         config_files,

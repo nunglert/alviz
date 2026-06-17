@@ -30,6 +30,9 @@ dependencies = [
     "numpy",
     "matplotlib",
     "pydantic>=2",
+    "ase",
+    # Combine per-page dashboard PDFs into one multipage file (alviz.merge_pdfs).
+    "pypdf>=3",
 ]
 readme = "README.md"
 
@@ -38,10 +41,6 @@ dev = [
     "pytest",
     "pytest-cov",
     "pre-commit",
-]
-# Concrete panels that read atomistic artifacts (extxyz) need ASE.
-panels = [
-    "ase",
 ]
 
 [tool.setuptools.packages.find]
