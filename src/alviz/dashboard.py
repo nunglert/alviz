@@ -190,9 +190,6 @@ class Entry(ABC):
             self.data = data
             self.data.to_json(json_file, indent=self._indent)
 
-    def register_arguments(self, parser):
-        pass
-
     @abstractmethod
     def allocate_panels(self, fig):
         """Allocate subplots in the given figure.
@@ -280,8 +277,6 @@ class Dashboard:
         self._ncols = ncols
         self._width_per_panel = width_per_panel
         self._fail_silently = fail_silently
-        self._global_args = None
-        self._parser = None
 
         self._entries: list[Entry] = []
         self._shared_ressources = {}
@@ -380,9 +375,6 @@ class Dashboard:
         # Assign the subspec to the entry
         entry.subspec = self._gs[xslice, yslice]
         self._entries.append(entry)
-
-        # NOT USED YET
-        entry.register_arguments(self._parser)
 
     def allocate_panels(self):
         """Allocate the panels for each entry in the dashboard."""
