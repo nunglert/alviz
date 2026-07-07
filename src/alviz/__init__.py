@@ -21,10 +21,12 @@ from alviz.mpl_utils import JsonDict
 from alviz.pdf import merge_pdfs
 from alviz.spec import (
     PanelSpec,
+    apply_globals,
     build_entries,
     panel_spec_model,
     parse_specs,
     register_panel,
+    register_simple,
     registered_types,
     resolve_panel_list,
 )
@@ -39,10 +41,12 @@ __all__ = [
     "merge_pdfs",
     "PanelSpec",
     "register_panel",
+    "register_simple",
     "registered_types",
     "panel_spec_model",
     "parse_specs",
     "resolve_panel_list",
     "build_entries",
+    "apply_globals",
 ]
 __version__ = "0.1.0"

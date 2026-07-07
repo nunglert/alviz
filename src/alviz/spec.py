@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, create_model
 
 
 class PanelSpec(BaseModel):
@@ -89,6 +89,25 @@ def register_panel(type_name: str, spec_model, builder) -> None:
     PANEL_REGISTRY[type_name] = _Registered(spec_model, builder)
 
 
+def register_simple(type_name: str, builder) -> type:
+    """Register a *param-less* panel type: a trivial spec + a simple builder.
+
+    Synthesizes a :class:`PanelSpec` subclass with no extra fields (so the panel
+    is still describable/selectable in config) and registers it. ``builder`` is
+    the convenience form ``builder(context, common) -> Entry | None`` -- it does
+    not receive the spec (there are no params to read). For a panel *with*
+    parameters, define a :class:`PanelSpec` subclass and use
+    :func:`register_panel` directly. Returns the synthesized spec model.
+    """
+    model = create_model(
+        f"{type_name}_spec", __base__=PanelSpec, type=(str, type_name)
+    )
+    register_panel(
+        type_name, model, lambda spec, ctx, common: builder(ctx, common)
+    )
+    return model
+
+
 def registered_types() -> list:
     """The registered panel ``type`` names, sorted (for config scaffolding)."""
     return sorted(PANEL_REGISTRY)
@@ -125,6 +144,24 @@ def parse_specs(raw) -> list:
             )
         specs.append(reg.spec_model.model_validate(item))
     return specs
+
+
+def apply_globals(spec, globals: dict):
+    """Fill a spec's *unset* fields from ``globals`` of the same name.
+
+    A field the user did not explicitly set (not in ``model_fields_set``) whose
+    name matches a key in ``globals`` takes the global value; an explicitly-set
+    field (a per-panel override) is left untouched. Fields with no matching
+    global keep their own default. Returns ``spec`` unchanged if nothing fills,
+    else a copy. This is what makes global settings inherit into every panel
+    automatically -- a panel only opts in by *declaring* the field.
+    """
+    fill = {
+        name: globals[name]
+        for name in type(spec).model_fields
+        if name not in spec.model_fields_set and name in globals
+    }
+    return spec.model_copy(update=fill) if fill else spec
 
 
 def _disabled(spec, disable: set) -> bool:

@@ -1,8 +1,6 @@
 """Tests for the registry-driven panel-spec machinery (alviz.spec)."""
 
 import pytest
-from pydantic import ValidationError
-
 from alviz import Entry
 from alviz.mpl_utils import JsonDict
 from alviz.spec import (
@@ -14,6 +12,7 @@ from alviz.spec import (
     registered_types,
     resolve_panel_list,
 )
+from pydantic import ValidationError
 
 pytestmark = pytest.mark.local
 
