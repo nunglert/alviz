@@ -77,12 +77,19 @@ def parity_scatter(
     title=None,
     **scatter_kwargs,
 ):
-    """Scatter ``pred`` vs ``obs`` with a y=x guide and RMSE/MAE annotation."""
+    """Scatter ``pred`` vs ``obs`` with a y=x guide and RMSE/MAE annotation.
+
+    The markers are rasterized by default (``rasterized=False`` in
+    ``scatter_kwargs`` keeps them vector): a force parity has 3 points per
+    atom, tens of thousands per panel, which as vector paths bloat the PDF.
+    Axes, labels and the y=x guide stay vector.
+    """
     obs = np.asarray(obs, dtype=float)
     pred = np.asarray(pred, dtype=float)
 
     s = scatter_kwargs.pop("s", 8)
     alpha = scatter_kwargs.pop("alpha", 0.5)
+    scatter_kwargs.setdefault("rasterized", True)
     ax.scatter(obs, pred, s=s, alpha=alpha, **scatter_kwargs)
 
     if obs.size and pred.size:

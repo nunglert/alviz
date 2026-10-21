@@ -206,3 +206,24 @@ def test_custom_parity_source(tmp_path):
     out = tmp_path / "custom.pdf"
     board.savefig(out)
     assert out.exists() and out.stat().st_size > 0
+
+
+# --------------------------------------------------------------------------
+# Rendering: markers rasterized unless plot_kwargs say otherwise
+# --------------------------------------------------------------------------
+@pytest.mark.local
+def test_parity_scatter_rasterized_by_default():
+    import matplotlib.pyplot as plt
+
+    from alviz.panels.training.parity import parity_scatter
+
+    fig, (ax_a, ax_b) = plt.subplots(1, 2)
+    parity_scatter(ax_a, [1.0, 2.0], [1.1, 1.9])
+    parity_scatter(ax_b, [1.0, 2.0], [1.1, 1.9], rasterized=False)
+    (points_a,) = ax_a.collections
+    (points_b,) = ax_b.collections
+    assert points_a.get_rasterized()
+    assert not points_b.get_rasterized()
+    # The y=x guide stays vector.
+    assert not ax_a.lines[0].get_rasterized()
+    plt.close(fig)
