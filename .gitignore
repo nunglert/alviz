@@ -12,3 +12,5 @@ venv/
 
 # Local matplotlib output from ad-hoc runs
 *.pdf
+
+experiments
